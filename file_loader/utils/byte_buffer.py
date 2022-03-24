@@ -48,7 +48,9 @@ class ByteBuffer:
 
         elif read_format == 'string' or read_format == 'key_tree':
             if num_read > 0:
-                s = self.s[self.cursor:self.cursor+num_read].decode()
+                s = self.s[self.cursor:self.cursor+num_read].decode(errors='ignore') #CAVE: The ignore was not in there. This is only for testing
+                #TODO: there are \xff bytes (and maybe more) in the file which cannot be read as utf-8
+                #For now we ignore it but this is not an optimal soultion. Need to find a solution.
                 self.cursor += num_read
             else:
                 # Will I regret my life over this?

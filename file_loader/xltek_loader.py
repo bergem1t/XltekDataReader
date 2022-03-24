@@ -38,6 +38,10 @@ class XltekLoader:
                     if file_type not in self.files_dict.keys():
                         self.files_dict[file_type] = []
                     self.files_dict[file_type].append(f_full)
+        
+        # sort it
+        for k,v in self.files_dict.items():
+          self.files_dict[k] = list(np.sort(v))
 
         # Assign file loaders for each of the files
         for file_type in loaders.keys():
@@ -102,10 +106,10 @@ class XltekLoader:
         filetime = self.loaders_dict['snc_loader'].data['time_mappings']['sample_time']
 
         # Use start & end filetime of video to interpolate each frame's filetime
-        frame_filetime_lst = frame_filetime(
-            self.loaders_dict['vtc_loader'],
-            self.load_dir  
-        )
+        # frame_filetime_lst = frame_filetime(
+        #     self.loaders_dict['vtc_loader'],
+        #     self.load_dir  
+        # )
 
         # Attach note to their sample stamp
         note_dict = dict()
@@ -125,7 +129,7 @@ class XltekLoader:
             'EEGData': data_array,
             'ChannelNames': c_names+['SampleStamp'],
             'Notes': note_dict,
-            'FrameAndFiletime': frame_filetime_lst,
+            'FrameAndFiletime': [],#frame_filetime_lst,
             'FiletimeStampConversion': (
                 filetime,
                 samplestamp
@@ -141,25 +145,93 @@ class XltekLoader:
         return res
 
     def read(self):
-        for loader_id in range(len(self.files_dict['erd'])):
+        # takes a minute or so to even load a single erd file
+        # probably because of the slow VPN network
+        for loader_id in range(len(self.files_dict['erd'])): # the actual data
             self.loaders_dict['erd_loader_{}'.format(loader_id)].load()
-        for loader_id in range(len(self.files_dict['etc'])):
+        # etc loads pretty quickly
+        for loader_id in range(len(self.files_dict['etc'])): # datachunk info from erd?
             self.loaders_dict['etc_loader_{}'.format(loader_id)].load()
         self.loaders_dict['eeg_loader'].load()
         self.loaders_dict['ent_loader'].load()
         self.loaders_dict['stc_loader'].load()
-        self.loaders_dict['vtc_loader'].load()
+        #self.loaders_dict['vtc_loader'].load() # see below
         self.loaders_dict['snc_loader'].load()
 
     def validate(self):
-        for loader_id in range(len(self.files_dict['erd'])):
-            self.loaders_dict['erd_loader_{}'.format(loader_id)].validate()
-        for loader_id in range(len(self.files_dict['etc'])):
-            self.loaders_dict['etc_loader_{}'.format(loader_id)].validate(
-                self.loaders_dict['erd_loader_{}'.format(loader_id)]
-            )  # Use toc file to validate erd
-        self.loaders_dict['eeg_loader'].validate()
-        self.loaders_dict['ent_loader'].validate()
-        self.loaders_dict['stc_loader'].validate()
-        self.loaders_dict['vtc_loader'].validate()
-        self.loaders_dict['snc_loader'].validate()
+      # strainge implementation: I'm not sure what the true or false result
+      # from the validate function means since even a false validation seems
+      # to produce results. Howver, it produces an error if the file is not loaded
+      for loader_id in range(len(self.files_dict['erd'])):
+          self.loaders_dict['erd_loader_{}'.format(loader_id)].validate()
+      for loader_id in range(len(self.files_dict['etc'])):
+          self.loaders_dict['etc_loader_{}'.format(loader_id)].validate(
+              self.loaders_dict['erd_loader_{}'.format(loader_id)]
+          )  # Use toc file to validate erd
+      self.loaders_dict['eeg_loader'].validate()
+      self.loaders_dict['ent_loader'].validate()
+      self.loaders_dict['stc_loader'].validate()
+      self.loaders_dict['vtc_loader'].validate()
+      self.loaders_dict['snc_loader'].validate()
+        
+    # new function to just read the header information without the data
+    def load_header(self):
+        self.loaders_dict['eeg_loader'].load() # study info - lots of it
+        self.loaders_dict['ent_loader'].load() # notes
+        self.loaders_dict['stc_loader'].load() # ??
+        #self.loaders_dict['vtc_loader'].load() 
+        #   File "c:\users\michael\gitrepos\xltekdatareader\file_loader\utils\byte_buffer.py", line 71, in read
+        #     val = struct.unpack(
+        
+        # error: unpack requires a buffer of 16 bytes
+        #
+        # VTC loader should probably not be necessary since it is the video
+        # we already have this information in the dayhandle
+        self.loaders_dict['snc_loader'].load() # ?? timing info
+        
+    def validate_header(self):
+      valid = True
+      valid &= self.loaders_dict['eeg_loader'].validate() 
+      valid &= self.loaders_dict['ent_loader'].validate() # returns false - seems to work nonetheless
+      valid &= self.loaders_dict['stc_loader'].validate()
+      valid &= self.loaders_dict['vtc_loader'].validate()
+      valid &= self.loaders_dict['snc_loader'].validate() # returns false - seems to work nonetheless
+      return valid
+        
+    def get_header(self):
+      # Use snc to create FILETIME for each packet
+      samplestamp = self.loaders_dict['snc_loader'].data['time_mappings']['samplestamp']
+      filetime = self.loaders_dict['snc_loader'].data['time_mappings']['sample_time']
+
+      # Use start & end filetime of video to interpolate each frame's filetime
+      # frame_filetime_lst = frame_filetime(
+      #     self.loaders_dict['vtc_loader'],
+      #     self.load_dir  
+      # )
+
+      # Attach note to their sample stamp
+      note_dict = dict()
+      note_packets = self.loaders_dict['ent_loader'].data['note_packets']
+      for tree in note_packets['note_key_tree']:
+          if isinstance(tree, dict):
+              note_dict[int(tree['Stamp'])] = tree
+              # TODO: Handle failures in casting?
+
+      # Return channel names for the array (plus sample stamp). 
+      # TODO: Check that the channel orders/presence the same for different files
+      #c_names = self.loaders_dict['erd_loader_0'].channel_names
+
+      # Return list
+      ret_val = {
+          'StudyInfo': self.loaders_dict['eeg_loader'].data['study_info'],
+          'EEGData': [],
+          'ChannelNames': [],#c_names+['SampleStamp'],
+          'Notes': note_dict,
+          'FrameAndFiletime': [],#frame_filetime_lst, #-- should get this from the dayhandle
+          'FiletimeStampConversion': (
+              filetime,
+              samplestamp
+          )
+      }
+
+      return ret_val
